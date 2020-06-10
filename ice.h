@@ -18,7 +18,7 @@
 #define JANUS_ICE_H
 
 #include <glib.h>
-#include <agent.h>
+#include <nice/agent.h>
 
 #include "sdp.h"
 #include "dtls.h"
