@@ -149,6 +149,7 @@ notify_joining = true|false (optional, whether to notify all participants when a
 #include "../mutex.h"
 #include "../rtp.h"
 #include "../rtcp.h"
+#include "../ice.h"
 #include "../record.h"
 #include "../sdp-utils.h"
 #include "../utils.h"
@@ -157,11 +158,11 @@ notify_joining = true|false (optional, whether to notify all participants when a
 
 
 /* Plugin information */
-#define JANUS_AUVIOUSROOM_VERSION			9
-#define JANUS_AUVIOUSROOM_VERSION_STRING	"0.0.9"
+#define JANUS_AUVIOUSROOM_VERSION			10
+#define JANUS_AUVIOUSROOM_VERSION_STRING	"0.1.0"
 #define JANUS_AUVIOUSROOM_DESCRIPTION		"This is a plugin implementing a videoconferencing SFU (Selective Forwarding Unit) for Janus, that is an audio/video router."
 #define JANUS_AUVIOUSROOM_NAME			"JANUS AuviousRoom plugin"
-#define JANUS_AUVIOUSROOM_AUTHOR			"Meetecho s.r.l."
+#define JANUS_AUVIOUSROOM_AUTHOR			"Meetecho s.r.l. / Auvious ltd"
 #define JANUS_AUVIOUSROOM_PACKAGE			"janus.plugin.auviousroom"
 
 /* Plugin methods */
@@ -4889,15 +4890,24 @@ static void janus_auviousroom_relay_rtp_packet(gpointer data, gpointer user_data
 		// JANUS_LOG(LOG_ERR, "Streaming not started yet for this session...\n");
 		return;
 	}
+
+	janus_ice_handle *ice_handle = (janus_ice_handle *) listener->session->handle->gateway_handle;
 	
 	/* Make sure there hasn't been a publisher switch by checking the SSRC */
 	if(packet->is_video) {
-		packet->data->type = listener->video_pt;
 		/* Check if this listener is subscribed to this medium */
 		if(!listener->video) {
 			/* Nope, don't relay */
 			return;
 		}
+
+		/* store the original video payload type */
+		packet->data->type = listener->video_pt;
+		/* store the original video ssrc */
+		uint32_t feed_ssrc = ntohl(packet->data->ssrc);
+		/* use listener video ssrc */
+		packet->data->ssrc = htonl(ice_handle->stream->video_ssrc);
+
 		/* Check if there's any SVC info to take into account */
 		if(packet->svc) {
 			/* There is: check if this is a layer that can be dropped for this viewer
@@ -5004,6 +5014,8 @@ static void janus_auviousroom_relay_rtp_packet(gpointer data, gpointer user_data
 			packet->data->seq_number = htons(packet->seq_number);
 			/* Restore the video rtp type */
 			packet->data->type = listener->feed->video_pt;
+			/* Restore the video ssrc */
+			packet->data->ssrc = htonl(feed_ssrc);
 		} else if(packet->ssrc[0] != 0) {
 			/* Handle simulcast: don't relay if it's not the SSRC we wanted to handle */
 			uint32_t ssrc = ntohl(packet->data->ssrc);
@@ -5114,6 +5126,8 @@ static void janus_auviousroom_relay_rtp_packet(gpointer data, gpointer user_data
 			packet->data->seq_number = htons(packet->seq_number);
 			/* Restore the video rtp type */
 			packet->data->type = listener->feed->video_pt;
+			/* Restore the video ssrc */
+			packet->data->ssrc = htonl(feed_ssrc);
 			/* Restore the original payload descriptor as well, as it will be needed by the next viewer */
 			memcpy(payload, vp8pd, sizeof(vp8pd));
 		} else {
@@ -5127,14 +5141,23 @@ static void janus_auviousroom_relay_rtp_packet(gpointer data, gpointer user_data
 			packet->data->seq_number = htons(packet->seq_number);
 			/* Restore the video rtp type */
 			packet->data->type = listener->feed->video_pt;
+			/* Restore the video ssrc */
+			packet->data->ssrc = htonl(feed_ssrc);
 		}
 	} else {
-		packet->data->type = listener->audio_pt;
 		/* Check if this listener is subscribed to this medium */
 		if(!listener->audio) {
 			/* Nope, don't relay */
 			return;
 		}
+
+		/* use listener audio payload type */
+		packet->data->type = listener->audio_pt;
+		/* store the original ssrc */
+		uint32_t feed_ssrc = ntohl(packet->data->ssrc);
+		/* use listener audio ssrc */
+		packet->data->ssrc = htonl(ice_handle->stream->audio_ssrc);
+
 		/* Fix sequence number and timestamp (publisher switching may be involved) */
 		janus_rtp_header_update(packet->data, &listener->context, FALSE, 960);
 		/* Send the packet */
@@ -5143,8 +5166,11 @@ static void janus_auviousroom_relay_rtp_packet(gpointer data, gpointer user_data
 		/* Restore the timestamp and sequence number to what the publisher set them to */
 		packet->data->timestamp = htonl(packet->timestamp);
 		packet->data->seq_number = htons(packet->seq_number);
+
 		/* Restore the audio rtp type */
 		packet->data->type = listener->feed->audio_pt;
+		/* Restore the audio ssrc */
+		packet->data->ssrc = htonl(feed_ssrc);
 	}
 
 	return;
